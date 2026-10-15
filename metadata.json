@@ -1,0 +1,6 @@
+{
+  "name": "vigalMart",
+  "description": "vigalMART - A complete, professional full-stack online shopping marketplace application.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

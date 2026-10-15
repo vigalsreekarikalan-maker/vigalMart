@@ -1,0 +1,517 @@
+import { 
+  Product, Category, Order, User, Address, Review, 
+  CartItem, SavedForLaterItem, FilterOptions, SellerStats, AdminStats 
+} from '../types';
+import { 
+  INITIAL_PRODUCTS, INITIAL_CATEGORIES, INITIAL_USERS, 
+  INITIAL_ADDRESSES, INITIAL_ORDERS, INITIAL_REVIEWS 
+} from '../data/mockData';
+
+// Storage keys
+const STORAGE_KEYS = {
+  PRODUCTS: 'vgm_products_v2',
+  CATEGORIES: 'vgm_categories_v2',
+  USERS: 'vgm_users_v2',
+  CURRENT_USER: 'vgm_current_user_v2',
+  CART: 'vgm_cart_v2',
+  SAVED_FOR_LATER: 'vgm_saved_later_v2',
+  WISHLIST: 'vgm_wishlist_v2',
+  ORDERS: 'vgm_orders_v2',
+  ADDRESSES: 'vgm_addresses_v2',
+  REVIEWS: 'vgm_reviews_v2'
+};
+
+// Helper for local storage
+function getStorage<T>(key: string, defaultValue: T): T {
+  try {
+    const item = localStorage.getItem(key);
+    return item ? JSON.parse(item) : defaultValue;
+  } catch {
+    return defaultValue;
+  }
+}
+
+function setStorage<T>(key: string, value: T): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (e) {
+    console.error('Storage error', e);
+  }
+}
+
+// Initialize default state
+export function initializeStorage() {
+  if (!localStorage.getItem(STORAGE_KEYS.PRODUCTS)) {
+    setStorage(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
+  }
+  if (!localStorage.getItem(STORAGE_KEYS.CATEGORIES)) {
+    setStorage(STORAGE_KEYS.CATEGORIES, INITIAL_CATEGORIES);
+  }
+  if (!localStorage.getItem(STORAGE_KEYS.USERS)) {
+    setStorage(STORAGE_KEYS.USERS, INITIAL_USERS);
+  }
+  if (!localStorage.getItem(STORAGE_KEYS.CURRENT_USER)) {
+    setStorage(STORAGE_KEYS.CURRENT_USER, INITIAL_USERS[0]); // Default Buyer
+  }
+  if (!localStorage.getItem(STORAGE_KEYS.ADDRESSES)) {
+    setStorage(STORAGE_KEYS.ADDRESSES, INITIAL_ADDRESSES);
+  }
+  if (!localStorage.getItem(STORAGE_KEYS.ORDERS)) {
+    setStorage(STORAGE_KEYS.ORDERS, INITIAL_ORDERS);
+  }
+  if (!localStorage.getItem(STORAGE_KEYS.REVIEWS)) {
+    setStorage(STORAGE_KEYS.REVIEWS, INITIAL_REVIEWS);
+  }
+  if (!localStorage.getItem(STORAGE_KEYS.WISHLIST)) {
+    setStorage(STORAGE_KEYS.WISHLIST, [INITIAL_PRODUCTS[0].id, INITIAL_PRODUCTS[1].id]);
+  }
+  if (!localStorage.getItem(STORAGE_KEYS.CART)) {
+    setStorage(STORAGE_KEYS.CART, [
+      { product: INITIAL_PRODUCTS[0], quantity: 1 }
+    ]);
+  }
+}
+
+initializeStorage();
+
+export const ApiService = {
+  // Auth
+  getCurrentUser(): User {
+    return getStorage<User>(STORAGE_KEYS.CURRENT_USER, INITIAL_USERS[0]);
+  },
+
+  setCurrentUser(user: User): void {
+    setStorage(STORAGE_KEYS.CURRENT_USER, user);
+    window.dispatchEvent(new Event('vgm_auth_changed'));
+  },
+
+  getAllUsers(): User[] {
+    return getStorage<User[]>(STORAGE_KEYS.USERS, INITIAL_USERS);
+  },
+
+  updateUserStatus(userId: string, action: 'activate' | 'deactivate' | 'suspend'): User[] {
+    let users = getStorage<User[]>(STORAGE_KEYS.USERS, INITIAL_USERS);
+    // filter or update
+    users = users.map(u => u.id === userId ? { ...u, status: action } : u);
+    setStorage(STORAGE_KEYS.USERS, users);
+    return users;
+  },
+
+  // Products
+  getProducts(filters?: FilterOptions): Product[] {
+    let products = getStorage<Product[]>(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
+    
+    if (!filters) return products;
+
+    if (filters.query) {
+      const q = filters.query.toLowerCase();
+      products = products.filter(p => 
+        p.name.toLowerCase().includes(q) ||
+        p.brand.toLowerCase().includes(q) ||
+        p.category.toLowerCase().includes(q) ||
+        p.description.toLowerCase().includes(q) ||
+        p.sku.toLowerCase().includes(q)
+      );
+    }
+
+    if (filters.category && filters.category !== 'All') {
+      products = products.filter(p => p.category.toLowerCase() === filters.category!.toLowerCase());
+    }
+
+    if (filters.brand) {
+      products = products.filter(p => p.brand.toLowerCase() === filters.brand!.toLowerCase());
+    }
+
+    if (filters.minPrice !== undefined) {
+      products = products.filter(p => p.price >= filters.minPrice!);
+    }
+
+    if (filters.maxPrice !== undefined) {
+      products = products.filter(p => p.price <= filters.maxPrice!);
+    }
+
+    if (filters.minRating !== undefined) {
+      products = products.filter(p => p.rating >= filters.minRating!);
+    }
+
+    if (filters.inStockOnly) {
+      products = products.filter(p => p.inStock && p.stock > 0);
+    }
+
+    if (filters.discountOnly) {
+      products = products.filter(p => p.discountPercentage > 0);
+    }
+
+    // Sorting
+    if (filters.sortBy) {
+      switch (filters.sortBy) {
+        case 'price-low':
+          products.sort((a, b) => a.price - b.price);
+          break;
+        case 'price-high':
+          products.sort((a, b) => b.price - a.price);
+          break;
+        case 'rating':
+          products.sort((a, b) => b.rating - a.rating);
+          break;
+        case 'newest':
+          products.sort((a, b) => (b.isNewRelease ? 1 : 0) - (a.isNewRelease ? 1 : 0));
+          break;
+        case 'best-selling':
+          products.sort((a, b) => b.reviewCount - a.reviewCount);
+          break;
+        default:
+          break;
+      }
+    }
+
+    return products;
+  },
+
+  getProductById(id: string): Product | undefined {
+    const products = getStorage<Product[]>(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
+    return products.find(p => p.id === id);
+  },
+
+  saveProduct(product: Partial<Product>): Product {
+    const products = getStorage<Product[]>(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
+    let saved: Product;
+
+    if (product.id) {
+      const index = products.findIndex(p => p.id === product.id);
+      if (index !== -1) {
+        saved = { ...products[index], ...product } as Product;
+        products[index] = saved;
+      } else {
+        saved = product as Product;
+        products.push(saved);
+      }
+    } else {
+      const newId = `vgm-prod-${Date.now().toString().slice(-5)}`;
+      saved = {
+        id: newId,
+        name: product.name || 'New Product',
+        brand: product.brand || 'VigalBrand',
+        category: product.category || 'Electronics',
+        price: product.price || 999,
+        originalPrice: product.originalPrice || 1299,
+        discountPercentage: product.discountPercentage || 23,
+        rating: 5.0,
+        reviewCount: 1,
+        stock: product.stock || 10,
+        inStock: (product.stock ?? 10) > 0,
+        deliveryInfo: 'FREE Standard Delivery',
+        image: product.image || 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=600&auto=format&fit=crop&q=80',
+        description: product.description || 'High quality product on vigalMart',
+        features: product.features || ['Original product guarantee'],
+        specifications: product.specifications || { 'Warranty': '1 Year' },
+        sellerId: product.sellerId || 'seller-1',
+        sellerName: product.sellerName || 'VigalTech Solutions',
+        sku: product.sku || `VGM-SKU-${Date.now().toString().slice(-4)}`,
+        approved: true
+      };
+      products.unshift(saved);
+    }
+
+    setStorage(STORAGE_KEYS.PRODUCTS, products);
+    window.dispatchEvent(new Event('vgm_products_changed'));
+    return saved;
+  },
+
+  deleteProduct(id: string): void {
+    let products = getStorage<Product[]>(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
+    products = products.filter(p => p.id !== id);
+    setStorage(STORAGE_KEYS.PRODUCTS, products);
+    window.dispatchEvent(new Event('vgm_products_changed'));
+  },
+
+  // Categories
+  getCategories(): Category[] {
+    return getStorage<Category[]>(STORAGE_KEYS.CATEGORIES, INITIAL_CATEGORIES);
+  },
+
+  // Cart
+  getCart(): CartItem[] {
+    return getStorage<CartItem[]>(STORAGE_KEYS.CART, []);
+  },
+
+  addToCart(product: Product, quantity = 1): CartItem[] {
+    const cart = getStorage<CartItem[]>(STORAGE_KEYS.CART, []);
+    const existingIndex = cart.findIndex(ci => ci.product.id === product.id);
+
+    if (existingIndex !== -1) {
+      cart[existingIndex].quantity += quantity;
+    } else {
+      cart.push({ product, quantity });
+    }
+
+    setStorage(STORAGE_KEYS.CART, cart);
+    window.dispatchEvent(new Event('vgm_cart_changed'));
+    return cart;
+  },
+
+  updateCartQuantity(productId: string, quantity: number): CartItem[] {
+    let cart = getStorage<CartItem[]>(STORAGE_KEYS.CART, []);
+    if (quantity <= 0) {
+      cart = cart.filter(ci => ci.product.id !== productId);
+    } else {
+      const item = cart.find(ci => ci.product.id === productId);
+      if (item) item.quantity = quantity;
+    }
+    setStorage(STORAGE_KEYS.CART, cart);
+    window.dispatchEvent(new Event('vgm_cart_changed'));
+    return cart;
+  },
+
+  removeFromCart(productId: string): CartItem[] {
+    let cart = getStorage<CartItem[]>(STORAGE_KEYS.CART, []);
+    cart = cart.filter(ci => ci.product.id !== productId);
+    setStorage(STORAGE_KEYS.CART, cart);
+    window.dispatchEvent(new Event('vgm_cart_changed'));
+    return cart;
+  },
+
+  clearCart(): void {
+    setStorage(STORAGE_KEYS.CART, []);
+    window.dispatchEvent(new Event('vgm_cart_changed'));
+  },
+
+  // Saved for later
+  getSavedForLater(): SavedForLaterItem[] {
+    return getStorage<SavedForLaterItem[]>(STORAGE_KEYS.SAVED_FOR_LATER, []);
+  },
+
+  saveForLater(product: Product): void {
+    this.removeFromCart(product.id);
+    const saved = getStorage<SavedForLaterItem[]>(STORAGE_KEYS.SAVED_FOR_LATER, []);
+    if (!saved.some(item => item.product.id === product.id)) {
+      saved.push({ product, addedAt: new Date().toISOString() });
+      setStorage(STORAGE_KEYS.SAVED_FOR_LATER, saved);
+      window.dispatchEvent(new Event('vgm_cart_changed'));
+    }
+  },
+
+  moveToCartFromSaved(product: Product): void {
+    let saved = getStorage<SavedForLaterItem[]>(STORAGE_KEYS.SAVED_FOR_LATER, []);
+    saved = saved.filter(item => item.product.id !== product.id);
+    setStorage(STORAGE_KEYS.SAVED_FOR_LATER, saved);
+    this.addToCart(product, 1);
+  },
+
+  // Wishlist
+  getWishlist(): string[] {
+    return getStorage<string[]>(STORAGE_KEYS.WISHLIST, []);
+  },
+
+  toggleWishlist(productId: string): boolean {
+    const wishlist = getStorage<string[]>(STORAGE_KEYS.WISHLIST, []);
+    const index = wishlist.indexOf(productId);
+    let added = false;
+    if (index !== -1) {
+      wishlist.splice(index, 1);
+    } else {
+      wishlist.push(productId);
+      added = true;
+    }
+    setStorage(STORAGE_KEYS.WISHLIST, wishlist);
+    window.dispatchEvent(new Event('vgm_wishlist_changed'));
+    return added;
+  },
+
+  isInWishlist(productId: string): boolean {
+    const wishlist = getStorage<string[]>(STORAGE_KEYS.WISHLIST, []);
+    return wishlist.includes(productId);
+  },
+
+  // Addresses
+  getAddresses(): Address[] {
+    return getStorage<Address[]>(STORAGE_KEYS.ADDRESSES, INITIAL_ADDRESSES);
+  },
+
+  saveAddress(address: Partial<Address>): Address[] {
+    const addresses = getStorage<Address[]>(STORAGE_KEYS.ADDRESSES, INITIAL_ADDRESSES);
+    if (address.id) {
+      const idx = addresses.findIndex(a => a.id === address.id);
+      if (idx !== -1) {
+        addresses[idx] = { ...addresses[idx], ...address } as Address;
+      }
+    } else {
+      const newAddr: Address = {
+        id: `addr-${Date.now()}`,
+        fullName: address.fullName || 'User',
+        street: address.street || '',
+        city: address.city || '',
+        state: address.state || '',
+        zipCode: address.zipCode || '',
+        country: address.country || 'India',
+        phone: address.phone || '',
+        isDefault: addresses.length === 0
+      };
+      addresses.push(newAddr);
+    }
+    setStorage(STORAGE_KEYS.ADDRESSES, addresses);
+    return addresses;
+  },
+
+  // Orders
+  getOrders(userId?: string): Order[] {
+    let orders = getStorage<Order[]>(STORAGE_KEYS.ORDERS, INITIAL_ORDERS);
+    if (userId) {
+      orders = orders.filter(o => o.userId === userId);
+    }
+    return orders.sort((a, b) => new Date(b.orderDate).getTime() - new Date(a.orderDate).getTime());
+  },
+
+  getOrderById(orderId: string): Order | undefined {
+    const orders = getStorage<Order[]>(STORAGE_KEYS.ORDERS, INITIAL_ORDERS);
+    return orders.find(o => o.id === orderId);
+  },
+
+  createOrder(
+    items: CartItem[], 
+    shippingAddress: Address, 
+    paymentMethod: 'COD' | 'UPI_DEMO' | 'CARD_DEMO'
+  ): Order {
+    const currentUser = this.getCurrentUser();
+    const orders = getStorage<Order[]>(STORAGE_KEYS.ORDERS, INITIAL_ORDERS);
+    
+    const itemsTotal = items.reduce((sum, ci) => sum + (ci.product.price * ci.quantity), 0);
+    const originalTotal = items.reduce((sum, ci) => sum + (ci.product.originalPrice * ci.quantity), 0);
+    const discountTotal = Math.max(0, originalTotal - itemsTotal);
+    const deliveryFee = itemsTotal > 499 ? 0 : 49;
+    const tax = Math.round(itemsTotal * 0.05);
+    const grandTotal = itemsTotal + deliveryFee + tax;
+
+    const orderId = `VGM-2026-${Math.floor(100000 + Math.random() * 900000)}`;
+
+    const newOrder: Order = {
+      id: orderId,
+      userId: currentUser.id,
+      userEmail: currentUser.email,
+      userName: currentUser.name,
+      items: items.map(ci => ({
+        product: ci.product,
+        quantity: ci.quantity,
+        price: ci.product.price
+      })),
+      shippingAddress,
+      paymentMethod,
+      paymentStatus: 'COMPLETED',
+      itemsTotal,
+      discountTotal,
+      deliveryFee,
+      tax,
+      grandTotal,
+      status: 'PLACED',
+      orderDate: new Date().toISOString().replace('T', ' ').slice(0, 16),
+      estimatedDelivery: new Date(Date.now() + 86400000 * 2).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+      statusHistory: [
+        {
+          status: 'PLACED',
+          timestamp: new Date().toISOString().replace('T', ' ').slice(0, 16),
+          description: 'Order placed successfully on vigalMart'
+        },
+        {
+          status: 'CONFIRMED',
+          timestamp: new Date().toISOString().replace('T', ' ').slice(0, 16),
+          description: 'Payment verified and order confirmed by seller'
+        }
+      ]
+    };
+
+    orders.unshift(newOrder);
+    setStorage(STORAGE_KEYS.ORDERS, orders);
+    this.clearCart();
+    window.dispatchEvent(new Event('vgm_orders_changed'));
+    return newOrder;
+  },
+
+  updateOrderStatus(orderId: string, status: Order, newStatus: string): Order | undefined {
+    const orders = getStorage<Order[]>(STORAGE_KEYS.ORDERS, INITIAL_ORDERS);
+    const order = orders.find(o => o.id === orderId);
+    if (order) {
+      order.status = newStatus as any;
+      order.statusHistory.push({
+        status: newStatus as any,
+        timestamp: new Date().toISOString().replace('T', ' ').slice(0, 16),
+        description: `Order status updated to ${newStatus}`
+      });
+      setStorage(STORAGE_KEYS.ORDERS, orders);
+      window.dispatchEvent(new Event('vgm_orders_changed'));
+    }
+    return order;
+  },
+
+  // Reviews
+  getReviewsForProduct(productId: string): Review[] {
+    const reviews = getStorage<Review[]>(STORAGE_KEYS.REVIEWS, INITIAL_REVIEWS);
+    return reviews.filter(r => r.productId === productId);
+  },
+
+  addReview(productId: string, rating: number, comment: string): Review {
+    const currentUser = this.getCurrentUser();
+    const reviews = getStorage<Review[]>(STORAGE_KEYS.REVIEWS, INITIAL_REVIEWS);
+    const newRev: Review = {
+      id: `rev-${Date.now()}`,
+      productId,
+      userId: currentUser.id,
+      userName: currentUser.name,
+      rating,
+      comment,
+      date: new Date().toISOString().split('T')[0],
+      verifiedPurchase: true
+    };
+    reviews.unshift(newRev);
+    setStorage(STORAGE_KEYS.REVIEWS, reviews);
+    
+    // update product rating average
+    const product = this.getProductById(productId);
+    if (product) {
+      const prodReviews = reviews.filter(r => r.productId === productId);
+      const avg = prodReviews.reduce((sum, r) => sum + r.rating, 0) / prodReviews.length;
+      product.rating = parseFloat(avg.toFixed(1));
+      product.reviewCount = prodReviews.length;
+      this.saveProduct(product);
+    }
+
+    return newRev;
+  },
+
+  // Dashboards Stats
+  getSellerStats(sellerId = 'seller-1'): SellerStats {
+    const products = this.getProducts().filter(p => p.sellerId === sellerId || p.sellerName?.includes('VigalTech'));
+    const orders = this.getOrders();
+    const totalSales = orders.length;
+    const revenue = orders.reduce((sum, o) => sum + o.grandTotal, 0);
+    const pendingOrders = orders.filter(o => o.status === 'PLACED' || o.status === 'CONFIRMED' || o.status === 'PROCESSING').length;
+    const lowStockItems = products.filter(p => p.stock < 10).length;
+
+    return {
+      totalProducts: products.length,
+      totalOrders: totalSales,
+      totalSales,
+      revenue,
+      pendingOrders,
+      lowStockItems
+    };
+  },
+
+  getAdminStats(): AdminStats {
+    const users = this.getAllUsers();
+    const products = this.getProducts();
+    const orders = this.getOrders();
+    const totalSellers = users.filter(u => u.role === 'SELLER').length || 5;
+    const revenue = orders.reduce((sum, o) => sum + o.grandTotal, 0);
+    const pendingOrders = orders.filter(o => o.status !== 'DELIVERED' && o.status !== 'CANCELLED').length;
+
+    return {
+      totalUsers: users.length + 120, // include system user total
+      totalSellers,
+      totalProducts: products.length,
+      totalOrders: orders.length + 45,
+      revenue: revenue + 248000,
+      pendingOrders,
+      pendingApprovals: 2
+    };
+  }
+};
